@@ -430,7 +430,13 @@ class FileServerHandler(BaseHTTPRequestHandler):
             return
 
         try:
-            names = sorted(os.listdir(fspath))
+            def sort_key(name):
+                full = os.path.join(fspath, name)
+                is_hidden = name.startswith(".")
+                is_file = not os.path.isdir(full)
+                return (is_hidden, is_file, name.lower())
+
+            names = sorted(os.listdir(fspath), key=sort_key)
         except PermissionError:
             self.send_error(403, "Permission Denied")
             return

@@ -10,6 +10,7 @@ httpfs.py - 轻量级 HTTP 文件服务器
 import argparse
 import hashlib
 import ipaddress
+import mimetypes
 import os
 import secrets
 import sys
@@ -27,6 +28,17 @@ SESSION_TTL = 86400  # 24小时
 CFG: argparse.Namespace | None = None
 PASSWORD_HASH: str | None = None  # sha256(password)
 WHITELIST: list = []  # ipaddress 对象列表
+
+INLINE_MIME_PREFIXES = ("text/", "image/", "audio/", "video/")
+INLINE_MIME_EXACT = {
+    "application/pdf",
+    "application/json",
+    "application/xml",
+    "application/javascript",
+}
+
+def is_inline_mime(mime_type: str) -> bool:
+    return mime_type.startswith(INLINE_MIME_PREFIXES) or mime_type in INLINE_MIME_EXACT
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -201,6 +213,27 @@ function fmtSize(b) {{
   if (b < 1048576) return (b/1024).toFixed(1) + ' KB';
   if (b < 1073741824) return (b/1048576).toFixed(1) + ' MB';
   return (b/1073741824).toFixed(2) + ' GB';
+}}
+function copyLink(el, relHref) {{
+  var url = location.protocol + '//' + location.host + location.pathname + relHref;
+  var done = function() {{
+    var orig = el.innerHTML;
+    el.innerHTML = '&#10003;';
+    el.style.color = '#27ae60';
+    setTimeout(function() {{ el.innerHTML = orig; el.style.color = '#888'; }}, 1500);
+  }};
+  if (navigator.clipboard && navigator.clipboard.writeText) {{
+    navigator.clipboard.writeText(url).then(done);
+  }} else {{
+    var ta = document.createElement('textarea');
+    ta.value = url;
+    ta.style.cssText = 'position:fixed;opacity:0';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    done();
+  }}
 }}
 </script>
 </body>
@@ -412,7 +445,7 @@ class FileServerHandler(BaseHTTPRequestHandler):
         if os.path.isdir(fspath):
             self._serve_dir(fspath, url_path, parsed.query)
         else:
-            self._serve_file(fspath)
+            self._serve_file(fspath, parsed.query)
 
     def _serve_dir(self, fspath: str, url_path: str, query: str):
         # 提取消息提示（上传后跳转带参）
@@ -465,9 +498,18 @@ class FileServerHandler(BaseHTTPRequestHandler):
             href = urllib.parse.quote(name, safe="") + ("/" if is_dir else "")
             size_str = "-" if is_dir else format_size(stat.st_size)
             mtime = time.strftime("%Y-%m-%d %H:%M", time.localtime(stat.st_mtime))
+            if is_dir:
+                action = ""
+            else:
+                dl_href = href + "?download=1"
+                action = (
+                    f'<a href="{dl_href}" title="下载" style="margin-left:8px;font-size:.82rem;color:#888;">&#11015;</a>'
+                    f'<a href="javascript:void(0)" onclick="copyLink(this,\'{href}\')" title="复制链接"'
+                    f' style="margin-left:6px;font-size:.82rem;color:#888;cursor:pointer;">&#128279;</a>'
+                )
             rows += (
                 f'<tr><td class="name"><span class="icon">{icon}</span>'
-                f'<a href="{href}">{name}</a></td>'
+                f'<a href="{href}">{name}</a>{action}</td>'
                 f'<td class="size">{size_str}</td>'
                 f'<td class="mtime">{mtime}</td></tr>\n'
             )
@@ -484,21 +526,33 @@ class FileServerHandler(BaseHTTPRequestHandler):
         )
         self.send_html(html)
 
-    def _serve_file(self, fspath: str):
+    def _serve_file(self, fspath: str, query: str = ""):
         filename = os.path.basename(fspath)
         stat = os.stat(fspath)
         size = stat.st_size
 
+        force_download = "download" in urllib.parse.parse_qs(query)
+
+        content_type, _ = mimetypes.guess_type(fspath)
+        if content_type is None:
+            content_type = "application/octet-stream"
+
+        if not force_download and is_inline_mime(content_type):
+            disposition = "inline"
+        else:
+            disposition = "attachment"
+            content_type = "application/octet-stream"
+
         # 编码文件名（RFC 5987）
         try:
             filename.encode("ascii")
-            cd = f'attachment; filename="{filename}"'
+            cd = f'{disposition}; filename="{filename}"'
         except UnicodeEncodeError:
             encoded = urllib.parse.quote(filename)
-            cd = f"attachment; filename*=UTF-8''{encoded}"
+            cd = f"{disposition}; filename*=UTF-8''{encoded}"
 
         self.send_response(200)
-        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Type", content_type)
         self.send_header("Content-Disposition", cd)
         self.send_header("Content-Length", str(size))
         self.end_headers()

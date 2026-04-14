@@ -561,6 +561,8 @@ class FileServerHandler(BaseHTTPRequestHandler):
             cd = f"{disposition}; filename*=UTF-8''{encoded}"
 
         self.send_response(200)
+        if content_type.startswith("text/"):
+            content_type += "; charset=utf-8"
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Disposition", cd)
         self.send_header("Content-Length", str(size))

@@ -191,6 +191,7 @@ DIR_HTML = """\
   </div>
 </div>
 <script>
+var wgetPassword = '{wget_password}';
 const dz = document.getElementById('drop-zone');
 const fi = document.getElementById('file-input');
 const fl = document.getElementById('file-list');
@@ -216,6 +217,12 @@ function fmtSize(b) {{
 }}
 function copyLink(el, relHref) {{
   var url = location.protocol + '//' + location.host + location.pathname + relHref;
+  var text;
+  if (wgetPassword) {{
+    text = 'wget --http-user=user --http-password=' + wgetPassword + ' "' + url + '"';
+  }} else {{
+    text = 'wget "' + url + '"';
+  }}
   var done = function() {{
     var orig = el.innerHTML;
     el.innerHTML = '&#10003;';
@@ -223,10 +230,10 @@ function copyLink(el, relHref) {{
     setTimeout(function() {{ el.innerHTML = orig; el.style.color = '#888'; }}, 1500);
   }};
   if (navigator.clipboard && navigator.clipboard.writeText) {{
-    navigator.clipboard.writeText(url).then(done);
+    navigator.clipboard.writeText(text).then(done);
   }} else {{
     var ta = document.createElement('textarea');
-    ta.value = url;
+    ta.value = text;
     ta.style.cssText = 'position:fixed;opacity:0';
     document.body.appendChild(ta);
     ta.select();
@@ -424,8 +431,9 @@ class FileServerHandler(BaseHTTPRequestHandler):
 
         # 需要认证但未认证
         if not self.is_authed():
-            # 携带了 Authorization 头说明是非浏览器客户端，返回 401
-            if self.headers.get("Authorization"):
+            # 非浏览器客户端（wget/curl 等）返回 401，触发 Basic Auth
+            ua = self.headers.get("User-Agent", "")
+            if self.headers.get("Authorization") or "Mozilla" not in ua:
                 self._require_basic_auth()
                 return
             target = urllib.parse.quote(url_path, safe="")
@@ -523,6 +531,7 @@ class FileServerHandler(BaseHTTPRequestHandler):
             rows=rows,
             message=msg,
             upload_action=upload_action,
+            wget_password=CFG.password or "",
         )
         self.send_html(html)
 
@@ -577,7 +586,8 @@ class FileServerHandler(BaseHTTPRequestHandler):
 
         # 需要认证但未认证
         if not self.is_authed():
-            if self.headers.get("Authorization"):
+            ua = self.headers.get("User-Agent", "")
+            if self.headers.get("Authorization") or "Mozilla" not in ua:
                 self._require_basic_auth()
                 return
             self.redirect("/login")

@@ -17,6 +17,7 @@ import sys
 import time
 import urllib.parse
 from email.parser import BytesParser
+import socketserver
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 
@@ -722,7 +723,10 @@ def main():
             except ValueError:
                 print(f"警告：无效的白名单条目：{item}", file=sys.stderr)
 
-    server = HTTPServer((CFG.bind, CFG.port), FileServerHandler)
+    class ThreadingHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
+        daemon_threads = True
+
+    server = ThreadingHTTPServer((CFG.bind, CFG.port), FileServerHandler)
 
     print(f"HTTP 文件服务器启动")
     print(f"  地址：http://{CFG.bind}:{CFG.port}")

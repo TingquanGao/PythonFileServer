@@ -325,28 +325,46 @@ def build_breadcrumb(url_path: str) -> str:
 
 def parse_multipart(rfile, content_type: str, content_length: int):
     """解析 multipart/form-data，返回字段 dict 和文件列表"""
-    # 读取全部数据（流式处理大文件时可改为分块）
     raw = rfile.read(content_length)
-    # 构造符合 email 解析要求的头部
-    header = f"Content-Type: {content_type}\r\n\r\n".encode()
-    msg = BytesParser().parsebytes(header + raw)
+    # 提取 boundary
+    import re
+    m = re.search(r'boundary=([^\s;]+)', content_type)
+    if not m:
+        raise ValueError("No boundary found")
+    boundary = b"--" + m.group(1).strip('"').encode()
+
     fields = {}
     files = []  # [(filename, data)]
-    for part in msg.get_payload():
-        cd = part.get("Content-Disposition", "")
+    parts = raw.split(boundary)
+    for part in parts[1:]:  # 跳过第一个空段
+        if part.startswith(b"--"):
+            break
+        # 分割头部和正文
+        sep = part.find(b"\r\n\r\n")
+        if sep < 0:
+            continue
+        head = part[2:sep]  # 跳过开头的 \r\n
+        body = part[sep + 4:]
+        if body.endswith(b"\r\n"):
+            body = body[:-2]
+        # 解析 Content-Disposition（按 UTF-8 解码头部以支持中文文件名）
+        cd_line = ""
+        for line in head.decode("utf-8", errors="replace").split("\r\n"):
+            if line.lower().startswith("content-disposition"):
+                cd_line = line.split(":", 1)[1]
+                break
         params = {}
-        for item in cd.split(";"):
+        for item in cd_line.split(";"):
             item = item.strip()
             if "=" in item:
                 k, v = item.split("=", 1)
                 params[k.strip()] = v.strip().strip('"')
         name = params.get("name", "")
         filename = params.get("filename", "")
-        payload = part.get_payload(decode=True) or b""
         if filename:
-            files.append((filename, payload))
+            files.append((filename, body))
         else:
-            fields[name] = payload.decode(errors="replace")
+            fields[name] = body.decode(errors="replace")
     return fields, files
 
 
